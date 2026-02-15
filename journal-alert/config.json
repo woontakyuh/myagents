@@ -2,6 +2,13 @@
   "notion_database_id": "307908af-25b9-80fa-84b7-e7b662b3160a",
   "notion_token": "",
 
+  "llm": {
+    "provider": "auto",
+    "openai_model": "gpt-4o-mini",
+    "anthropic_model": "claude-3-haiku-20240307",
+    "skip_cli_fallback": true
+  },
+
   "email": {
     "smtp_host": "smtp.gmail.com",
     "smtp_port": 587,

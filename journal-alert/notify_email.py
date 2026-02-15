@@ -199,11 +199,11 @@ def main():
 
     # 입력 파일 결정
     if args.latest:
-        files = sorted(glob.glob(os.path.join(DATA_DIR, "*.json")))
+        files = glob.glob(os.path.join(DATA_DIR, "*.json"))
         if not files:
             print("❌ data/ 에 JSON 파일 없음")
             sys.exit(1)
-        input_files = [files[-1]]
+        input_files = [max(files, key=os.path.getmtime)]
     elif args.data:
         input_files = args.data
     else:

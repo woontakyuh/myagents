@@ -59,18 +59,32 @@ PDF 투입
 
 ### 사용법
 ```bash
+# 환경변수 설정 (필수)
+export NOTION_TOKEN='ntn_...'
+export OPENAI_API_KEY='sk-...'       # 한글 요약/번역용 (또는 ANTHROPIC_API_KEY)
+export GMAIL_APP_PASSWORD='xxxx ...' # 이메일 알림용
+
 # 논문 수집
 cd journal-alert
 python fetch_papers.py --all --year 2026   # 전체 저널
 python fetch_papers.py --days 30           # 최근 30일
 
-# Notion에 Push
-export NOTION_TOKEN='ntn_...'
+# Notion에 Push (LLM으로 한글 요약 자동 생성)
 python push_to_notion.py --latest
+
+# 이메일 알림
+python notify_email.py --latest --dry-run  # 미리보기
+python notify_email.py --latest            # 실제 발송
 
 # 원커맨드
 cd journal-alert && python fetch_papers.py --all --year 2026 && python push_to_notion.py --latest
 ```
+
+### LLM 설정 (한글 요약/번역)
+config.json의 `llm` 섹션에서 프로바이더와 모델 설정 가능.
+- `provider`: `"auto"` (환경변수 기반 자동 선택), `"openai"`, `"anthropic"`, `"claude-cli"`
+- 환경변수: `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY`
+- LLM 미설정 시에도 수집/push는 정상 동작 (요약/번역만 생략)
 
 ### 자동 분류
 - 🔴 필독: endoscopy, biportal, UBE, AI/deep learning

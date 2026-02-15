@@ -11,10 +11,10 @@ import os
 import sys
 import glob
 import urllib.request
-import subprocess
-import shutil
+import urllib.error
 import time
 from datetime import datetime
+from llm_utils import check_llm_available, summarize_and_translate as llm_summarize
 
 # ─── 설정 ─────────────────────────────────────────────
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
@@ -23,7 +23,7 @@ def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
-def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict:
+def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict | None:
     """Notion API 호출"""
     url = f"https://api.notion.com/v1/{endpoint}"
     body = json.dumps(data).encode("utf-8")
@@ -75,60 +75,7 @@ def query_existing(database_id: str, token: str) -> set:
     return existing
 
 
-# ─── Claude CLI로 요약/번역 ──────────────────────────────
-def call_claude(prompt: str) -> str | None:
-    """claude -p CLI 호출 (Max 구독 인증 사용)"""
-    try:
-        env = os.environ.copy()
-        env.pop("CLAUDECODE", None)  # 중첩 세션 방지
-        result = subprocess.run(
-            ["claude", "-p", "--model", "haiku", prompt],
-            capture_output=True, text=True, timeout=120, env=env,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
 
-
-def check_claude_cli() -> bool:
-    """claude CLI 사용 가능 여부 확인"""
-    return shutil.which("claude") is not None
-
-
-def summarize_and_translate(title: str, abstract: str) -> tuple[str, str]:
-    """
-    Returns: (1줄 한글 요약, 한글 번역)
-    Claude CLI 미설치거나 실패하면 fallback
-    """
-    if not abstract:
-        return "", ""
-
-    prompt = f"""논문 제목: {title}
-
-Abstract:
-{abstract}
-
-다음 2가지를 출력하세요. 구분자 "---" 를 사이에 넣으세요.
-
-1) 이 논문의 결론을 한글 1줄로 요약 (50자 내외, 핵심 수치 포함). 의학용어는 영문 병기.
-2) Abstract 전체를 한글로 번역 (의학용어 영문 병기, 원문 구조 유지).
-
-형식:
-[1줄 요약]
----
-[한글 번역]"""
-
-    result = call_claude(prompt)
-    if not result:
-        return abstract[:100] if abstract else "", ""
-
-    parts = result.split("---", 1)
-    summary = parts[0].strip()
-    translation = parts[1].strip() if len(parts) > 1 else ""
-
-    return summary, translation
 
 
 # ─── 관심도/카테고리 분류 ─────────────────────────────────
@@ -293,28 +240,20 @@ def _chunk_text(text: str, size: int) -> list[str]:
 
 # ─── Notion 페이지 생성 ──────────────────────────────────
 def create_notion_page(article: dict, database_id: str, token: str,
-                       config: dict, use_claude: bool = False) -> bool:
-    """Notion 페이지 생성 (Summary + 페이지 본문 Abstract)"""
+                       config: dict, use_llm: bool = False) -> bool:
     interest = classify_interest(article, config)
 
-    # 저널명 매핑
     journal_key = article.get("_journal_key", "")
     journal_name = article.get("journal_abbr", "") or article.get("journal", "")
     if journal_key and journal_key in config.get("journals", {}):
         journal_name = config["journals"][journal_key]["name"]
 
-    # Category 자동 분류
     categories = auto_categorize(article, config)
-
-    # Journal Type 분류
     journal_type = classify_pub_type(article)
 
-    # Claude로 1줄 요약 + 한글 번역
     abstract = article.get("abstract", "")
-    if use_claude:
-        summary_ko, translation_ko = summarize_and_translate(
-            article["title"], abstract
-        )
+    if use_llm:
+        summary_ko, translation_ko = llm_summarize(article["title"], abstract, config)
     else:
         summary_ko = abstract[:100] if abstract else ""
         translation_ko = ""
@@ -403,12 +342,11 @@ def main():
         print("   export NOTION_TOKEN='ntn_...'")
         sys.exit(1)
 
-    # Claude CLI 확인
-    use_claude = check_claude_cli()
-    if use_claude:
-        print("🤖 Claude CLI 감지됨 — 한글 요약/번역 생성")
+    use_llm, llm_backend = check_llm_available(config)
+    if use_llm:
+        print(f"🤖 LLM 감지: {llm_backend} — 한글 요약/번역 생성")
     else:
-        print("⚠️  claude CLI 미설치 — 한글 요약/번역 없이 진행")
+        print("⚠️  LLM 미설정 — 한글 요약/번역 없이 진행 (OPENAI_API_KEY 또는 ANTHROPIC_API_KEY 설정 필요)")
 
     database_id = config["notion_database_id"]
 
@@ -416,11 +354,11 @@ def main():
     data_dir = os.path.join(os.path.dirname(__file__), "data")
 
     if len(sys.argv) > 1 and sys.argv[1] == "--latest":
-        files = sorted(glob.glob(os.path.join(data_dir, "*.json")))
+        files = glob.glob(os.path.join(data_dir, "*.json"))
         if not files:
             print("❌ data/ 에 JSON 파일 없음. fetch_papers.py 먼저 실행하세요.")
             sys.exit(1)
-        input_files = [files[-1]]
+        input_files = [max(files, key=os.path.getmtime)]
     elif len(sys.argv) > 1 and sys.argv[1] == "--all":
         input_files = sorted(glob.glob(os.path.join(data_dir, "*.json")))
     elif len(sys.argv) > 1:
@@ -458,7 +396,7 @@ def main():
             interest = classify_interest(article, config)
             emoji = "🔴" if "필독" in interest else "🟡" if "관심" in interest else "⚪"
 
-            success = create_notion_page(article, database_id, token, config, use_claude)
+            success = create_notion_page(article, database_id, token, config, use_llm)
             if success:
                 total_new += 1
                 existing.add(doi_url)

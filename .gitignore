@@ -28,7 +28,6 @@ journal-alert/logs/
 # Environment / Secrets
 .env
 .env.local
-*.env
 ~/.journal_alert_env
 
 # OpenCode runtime

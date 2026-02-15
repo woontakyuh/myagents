@@ -8,11 +8,11 @@ import json
 import os
 import sys
 import glob
+import urllib.error
 import urllib.request
-import subprocess
-import shutil
 import time
 from datetime import datetime
+from llm_utils import check_llm_available, summarize_and_translate as llm_summarize
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -21,7 +21,7 @@ def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
-def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict:
+def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict | None:
     url = f"https://api.notion.com/v1/{endpoint}"
     body = json.dumps(data).encode("utf-8")
     req = urllib.request.Request(url, data=body, method=method, headers={
@@ -105,47 +105,7 @@ def classify_pub_type(article: dict) -> str:
         return "Historical Article"
     return "Clinical Study"
 
-def call_claude(prompt: str) -> str | None:
-    try:
-        env = os.environ.copy()
-        env.pop("CLAUDECODE", None)  # 중첩 세션 방지
-        result = subprocess.run(
-            ["claude", "-p", "--model", "haiku", prompt],
-            capture_output=True, text=True, timeout=120, env=env,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
 
-def summarize_and_translate(title: str, abstract: str) -> tuple[str, str]:
-    if not abstract:
-        return "", ""
-
-    prompt = f"""논문 제목: {title}
-
-Abstract:
-{abstract}
-
-다음 2가지를 출력하세요. 구분자 "---" 를 사이에 넣으세요.
-
-1) 이 논문의 결론을 한글 1줄로 요약 (50자 내외, 핵심 수치 포함). 의학용어는 영문 병기.
-2) Abstract 전체를 한글로 번역 (의학용어 영문 병기, 원문 구조 유지).
-
-형식:
-[1줄 요약]
----
-[한글 번역]"""
-
-    result = call_claude(prompt)
-    if not result:
-        return abstract[:100] if abstract else "", ""
-
-    parts = result.split("---", 1)
-    summary = parts[0].strip()
-    translation = parts[1].strip() if len(parts) > 1 else ""
-    return summary, translation
 
 def _chunk_text(text: str, size: int) -> list[str]:
     if len(text) <= size:
@@ -156,24 +116,19 @@ def _chunk_text(text: str, size: int) -> list[str]:
         text = text[size:]
     return chunks
 
-def update_page(page_id: str, article: dict, token: str, use_claude: bool) -> bool:
-    """페이지 properties 업데이트 + 한글 번역 블록 추가"""
-    # Type 분류
+def update_page(page_id: str, article: dict, token: str, use_llm: bool, config: dict = None) -> bool:
     pub_type = classify_pub_type(article)
 
-    # 한글 요약/번역
     abstract = article.get("abstract", "")
-    if use_claude and abstract:
-        summary_ko, translation_ko = summarize_and_translate(article["title"], abstract)
+    if use_llm and abstract:
+        summary_ko, translation_ko = llm_summarize(article["title"], abstract, config)
     else:
         summary_ko = abstract[:100] if abstract else ""
         translation_ko = ""
 
-    # Properties 업데이트 (PATCH)
     props = {
         "Type": {"select": {"name": pub_type}},
     }
-    # Vol / Issue
     volume = article.get("volume", "")
     issue = article.get("issue", "")
     if volume:
@@ -217,12 +172,11 @@ def main():
 
     database_id = config["notion_database_id"]
 
-    # Claude CLI 확인
-    use_claude = shutil.which("claude") is not None
-    if use_claude:
-        print("🤖 Claude CLI 감지 — 한글 요약/번역 생성")
+    use_llm, llm_backend = check_llm_available(config)
+    if use_llm:
+        print(f"🤖 LLM 감지: {llm_backend} — 한글 요약/번역 생성")
     else:
-        print("⚠️  Claude CLI 없음 — Type만 업데이트")
+        print("⚠️  LLM 미설정 — Type만 업데이트")
 
     # 1. Notion 기존 페이지 조회
     print("📋 Notion DB 조회 중...")
@@ -264,7 +218,7 @@ def main():
         pub_type = classify_pub_type(article)
         print(f"  [{i+1}/{len(pages)}] {pub_type:20s} | {page['title'][:50]}...")
 
-        if update_page(page["page_id"], article, token, use_claude):
+        if update_page(page["page_id"], article, token, use_llm, config):
             updated += 1
         else:
             failed += 1
