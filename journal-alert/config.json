@@ -1,0 +1,102 @@
+{
+  "notion_database_id": "307908af-25b9-80fa-84b7-e7b662b3160a",
+  "notion_token": "",
+
+  "email": {
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "sender_email": "woontak.yuh@gmail.com",
+    "recipient_email": "woontak.yuh@gmail.com"
+  },
+
+  "journals": {
+    "spinej": {
+      "name": "The Spine Journal",
+      "pubmed_query": "Spine J",
+      "issn": "1529-9430"
+    },
+    "spine": {
+      "name": "Spine",
+      "pubmed_query": "Spine (Phila Pa 1976)",
+      "issn": "0362-2436"
+    },
+    "jns_spine": {
+      "name": "J Neurosurg Spine",
+      "pubmed_query": "J Neurosurg Spine",
+      "issn": "1547-5654"
+    },
+    "neurospine": {
+      "name": "Neurospine",
+      "pubmed_query": "Neurospine",
+      "issn": "2586-6583"
+    },
+    "eur_spine_j": {
+      "name": "European Spine Journal",
+      "pubmed_query": "Eur Spine J",
+      "issn": "0940-6719"
+    },
+    "global_spine_j": {
+      "name": "Global Spine Journal",
+      "pubmed_query": "Global Spine J",
+      "issn": "2192-5682"
+    }
+  },
+
+  "interest_keywords": {
+    "must_read": [
+      "endoscop",
+      "biportal",
+      "UBE",
+      "unilateral biportal",
+      "full-endoscopic",
+      "percutaneous endoscopic",
+      "artificial intelligence",
+      "deep learning",
+      "machine learning",
+      "neural network",
+      "large language model",
+      "computer vision",
+      "natural language processing"
+    ],
+    "interested": [
+      "minimally invasive",
+      "MIS",
+      "MISS",
+      "stenosis",
+      "disc herniation",
+      "lumbar fusion",
+      "decompression",
+      "laminectomy",
+      "foraminotomy",
+      "cervical",
+      "ACDF",
+      "outcome prediction",
+      "radiomics",
+      "automated",
+      "robot",
+      "navigation",
+      "augmented reality",
+      "virtual reality",
+      "simulation",
+      "education",
+      "training",
+      "learning curve",
+      "surgical technique"
+    ]
+  },
+
+  "category_rules": {
+    "Endoscopy": ["endoscop", "biportal", "UBE", "percutaneous endoscopic", "full-endoscopic"],
+    "AI/ML": ["artificial intelligence", "deep learning", "machine learning", "neural network", "computer vision", "natural language", "large language model", "radiomics", "automated"],
+    "MIS": ["minimally invasive", "MIS", "MISS", "percutaneous"],
+    "Lumbar": ["lumbar", "L4", "L5", "L3", "cauda equina"],
+    "Cervical": ["cervical", "ACDF", "arthroplasty", "disc replacement"],
+    "Deformity": ["scoliosis", "kyphosis", "deformity", "sagittal"],
+    "Tumor": ["tumor", "metast", "oncol"],
+    "Outcome": ["outcome", "patient-reported", "PRO", "PROM", "quality of life", "satisfaction"],
+    "Complication": ["complication", "reoperation", "revision", "infection", "dural tear"],
+    "Education": ["education", "training", "simulation", "learning curve", "cadaver"],
+    "Review": ["systematic review", "meta-analysis", "scoping review", "narrative review"],
+    "Biomechanics": ["biomechan", "finite element", "cadaver", "in vitro"]
+  }
+}
