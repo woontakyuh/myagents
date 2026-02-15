@@ -4,9 +4,9 @@
 
   "llm": {
     "provider": "auto",
+    "gemini_model": "gemini-2.0-flash",
     "openai_model": "gpt-4o-mini",
-    "anthropic_model": "claude-3-haiku-20240307",
-    "skip_cli_fallback": true
+    "anthropic_model": "claude-3-haiku-20240307"
   },
 
   "email": {

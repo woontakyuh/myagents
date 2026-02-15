@@ -84,14 +84,18 @@ def parse_article(article) -> dict:
     if not title:
         return None
     
-    # Authors
     authors = []
+    first_affiliation = ""
     for auth in article.findall(".//Author"):
         last = auth.findtext("LastName", "")
         fore = auth.findtext("ForeName", "")
         init = auth.findtext("Initials", "")
         if last:
             authors.append({"last": last, "fore": fore, "initials": init})
+            if not first_affiliation:
+                aff_el = auth.find(".//AffiliationInfo/Affiliation")
+                if aff_el is not None and aff_el.text:
+                    first_affiliation = aff_el.text.strip()
     
     author_str = format_authors(authors)
     
@@ -145,7 +149,8 @@ def parse_article(article) -> dict:
         "pmid": pmid,
         "title": title,
         "authors": author_str,
-        "author_list": authors[:10],  # 상세 저자 (최대 10명)
+        "author_list": authors[:10],
+        "affiliation": first_affiliation,
         "abstract": abstract,
         "doi": doi,
         "doi_url": f"https://doi.org/{doi}" if doi else "",

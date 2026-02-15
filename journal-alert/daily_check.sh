@@ -1,15 +1,9 @@
 #!/bin/bash
-# ─── Journal Alert 자동 실행 스크립트 ────────────────────
-# 매일 아침 cron으로 실행: 논문 수집 → Notion push → 이메일 알림
-# Usage: ./daily_check.sh
-
-# ─── 환경 설정 ──────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="${SCRIPT_DIR}/logs"
 LOG_FILE="${LOG_DIR}/$(date +%Y%m%d_%H%M%S).log"
 YEAR=$(date +%Y)
 
-# 환경변수 로드
 ENV_FILE="${HOME}/.journal_alert_env"
 if [ -f "$ENV_FILE" ]; then
     source "$ENV_FILE"
@@ -17,20 +11,16 @@ else
     echo "⚠️  ${ENV_FILE} 없음 — 환경변수 미로드" | tee -a "$LOG_FILE"
 fi
 
-# PATH 설정 (cron에서 python3 찾기 위해)
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-# 로그 디렉토리 생성
 mkdir -p "$LOG_DIR"
 
-# ─── 상태 추적 ──────────────────────────────────────────
 STATUS=""
+NEW_COUNT=0
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# ─── Step 1: 논문 수집 ─────────────────────────────────
 log "=== Step 1: 논문 수집 ==="
 if python3 "${SCRIPT_DIR}/fetch_papers.py" --all --year "$YEAR" >> "$LOG_FILE" 2>&1; then
     log "✅ 수집 완료"
@@ -40,25 +30,35 @@ else
     STATUS="${STATUS}fetch:fail "
 fi
 
-# ─── Step 2: Notion push ──────────────────────────────
 log "=== Step 2: Notion push ==="
-if python3 "${SCRIPT_DIR}/push_to_notion.py" --latest >> "$LOG_FILE" 2>&1; then
-    log "✅ Push 완료"
+PUSH_OUTPUT=$(python3 "${SCRIPT_DIR}/push_to_notion.py" --latest 2>&1)
+PUSH_EXIT=$?
+echo "$PUSH_OUTPUT" >> "$LOG_FILE"
+
+if [ $PUSH_EXIT -eq 0 ]; then
+    NEW_COUNT=$(echo "$PUSH_OUTPUT" | grep -o '새로 추가 [0-9]*' | grep -o '[0-9]*' || echo "0")
+    log "✅ Push 완료 (신규 ${NEW_COUNT}건)"
     STATUS="${STATUS}push:ok "
+elif [ $PUSH_EXIT -eq 2 ]; then
+    log "ℹ️  신규 논문 없음"
+    STATUS="${STATUS}push:ok(no_new) "
+    NEW_COUNT=0
 else
-    log "❌ Push 실패 (exit: $?)"
+    log "❌ Push 실패 (exit: $PUSH_EXIT)"
     STATUS="${STATUS}push:fail "
 fi
 
-# ─── Step 3: 이메일 알림 ──────────────────────────────
 log "=== Step 3: 이메일 알림 ==="
-if python3 "${SCRIPT_DIR}/notify_email.py" --latest --status "$STATUS" >> "$LOG_FILE" 2>&1; then
-    log "✅ 이메일 완료"
+if [ "$NEW_COUNT" -gt 0 ] 2>/dev/null; then
+    if python3 "${SCRIPT_DIR}/notify_email.py" --latest --status "$STATUS" >> "$LOG_FILE" 2>&1; then
+        log "✅ 이메일 완료 (신규 ${NEW_COUNT}건 알림)"
+    else
+        log "❌ 이메일 실패"
+    fi
 else
-    log "❌ 이메일 실패"
+    log "ℹ️  신규 논문 없음 — 이메일 생략"
 fi
 
-# ─── 오래된 로그 정리 (30일) ──────────────────────────
 find "$LOG_DIR" -name "*.log" -mtime +30 -delete 2>/dev/null
 
 log "=== 완료: ${STATUS}==="

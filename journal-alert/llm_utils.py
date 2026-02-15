@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-LLM 유틸리티 — 여러 백엔드 지원 (OpenAI, Anthropic, Claude CLI fallback)
-외부 의존성 없이 stdlib만 사용.
+LLM 유틸리티 — 여러 백엔드 지원. 외부 의존성 없이 stdlib만 사용.
 
-환경변수:
+환경변수 (우선순위순):
+  GOOGLE_API_KEY      → Google Gemini API (무료 1500req/day)
   OPENAI_API_KEY      → OpenAI API (gpt-4o-mini 등)
-  OPENAI_BASE_URL     → 커스텀 엔드포인트 (Antigravity 프록시 등)
   ANTHROPIC_API_KEY   → Anthropic API (claude-3-haiku 등)
-
-config.json의 "llm" 섹션으로 모델/프로바이더 설정 가능.
+  (없으면)            → Claude CLI (Max 구독 인증 사용)
 """
 
 import json
@@ -21,16 +19,19 @@ from typing import Optional
 
 def call_llm(prompt: str, config: dict = None) -> Optional[str]:
     """
-    LLM 호출 (자동 백엔드 선택)
-    
-    순서:
-    1. OpenAI API (OPENAI_API_KEY)
-    2. Anthropic API (ANTHROPIC_API_KEY)
-    3. Claude CLI (legacy fallback)
-    4. None
+    LLM 호출 — 자동 백엔드 선택 순서:
+    1. Google Gemini (GOOGLE_API_KEY, 무료)
+    2. OpenAI API (OPENAI_API_KEY)
+    3. Anthropic API (ANTHROPIC_API_KEY)
+    4. Claude CLI (Max 구독, 추가비용 없음)
     """
     llm_config = (config or {}).get("llm", {})
     provider = llm_config.get("provider", "auto")
+
+    if provider == "gemini" or (provider == "auto" and os.environ.get("GOOGLE_API_KEY")):
+        result = _call_gemini(prompt, llm_config)
+        if result:
+            return result
 
     if provider == "openai" or (provider == "auto" and os.environ.get("OPENAI_API_KEY")):
         result = _call_openai(prompt, llm_config)
@@ -42,13 +43,50 @@ def call_llm(prompt: str, config: dict = None) -> Optional[str]:
         if result:
             return result
 
-    skip_cli = llm_config.get("skip_cli_fallback", False)
-    if not skip_cli and provider in ("auto", "claude-cli"):
+    if provider in ("auto", "claude-cli"):
         result = _call_claude_cli(prompt)
         if result:
             return result
 
     return None
+
+
+def _call_gemini(prompt: str, llm_config: dict) -> Optional[str]:
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return None
+
+    model = llm_config.get("gemini_model", "gemini-2.0-flash")
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "systemInstruction": {
+            "parts": [{"text": "You are a medical research assistant specializing in spine surgery. Respond concisely."}]
+        },
+        "generationConfig": {
+            "temperature": 0.3,
+            "maxOutputTokens": 2000,
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read())
+        candidates = data.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            return "".join(p.get("text", "") for p in parts).strip()
+        return None
+    except Exception as e:
+        print(f"  [LLM] Gemini API 실패: {e}")
+        return None
 
 
 def _call_openai(prompt: str, llm_config: dict) -> Optional[str]:
@@ -148,6 +186,10 @@ def check_llm_available(config: dict = None) -> tuple[bool, str]:
     llm_config = (config or {}).get("llm", {})
     provider = llm_config.get("provider", "auto")
 
+    if provider == "gemini" or (provider == "auto" and os.environ.get("GOOGLE_API_KEY")):
+        model = llm_config.get("gemini_model", "gemini-2.0-flash")
+        return True, f"Gemini ({model}, 무료)"
+
     if provider == "openai" or (provider == "auto" and os.environ.get("OPENAI_API_KEY")):
         model = llm_config.get("openai_model", "gpt-4o-mini")
         return True, f"OpenAI ({model})"
@@ -156,9 +198,8 @@ def check_llm_available(config: dict = None) -> tuple[bool, str]:
         model = llm_config.get("anthropic_model", "claude-3-haiku-20240307")
         return True, f"Anthropic ({model})"
 
-    skip_cli = llm_config.get("skip_cli_fallback", False)
-    if not skip_cli and provider in ("auto", "claude-cli") and shutil.which("claude"):
-        return True, "Claude CLI (haiku)"
+    if provider in ("auto", "claude-cli") and shutil.which("claude"):
+        return True, "Claude CLI (Max 구독)"
 
     return False, "없음"
 

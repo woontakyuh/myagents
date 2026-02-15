@@ -283,7 +283,11 @@ def create_notion_page(article: dict, database_id: str, token: str,
         },
     }
 
-    # Vol / Issue
+    if article.get("affiliation"):
+        properties["Affiliations"] = {
+            "rich_text": [{"text": {"content": article["affiliation"][:2000]}}]
+        }
+
     if article.get("volume"):
         properties["Vol"] = {"rich_text": [{"text": {"content": article["volume"]}}]}
     if article.get("issue"):
@@ -408,6 +412,8 @@ def main():
             time.sleep(0.35)  # Notion rate limit
 
     print(f"\n✅ 완료: 새로 추가 {total_new}건, 중복 스킵 {total_skip}건")
+    return total_new
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    sys.exit(0 if result is None or result > 0 else 2)
