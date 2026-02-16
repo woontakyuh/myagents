@@ -59,6 +59,24 @@ else
     log "ℹ️  신규 논문 없음 — 이메일 생략"
 fi
 
+log "=== Step 4: 빈 Summary 자동 채움 (PubMed abstract 업데이트 반영) ==="
+if python3 "${SCRIPT_DIR}/update_existing.py" --fill-summary >> "$LOG_FILE" 2>&1; then
+    log "✅ Summary 보완 완료"
+    STATUS="${STATUS}summary:ok "
+else
+    log "⚠️  Summary 보완 일부 실패 (exit: $?)"
+    STATUS="${STATUS}summary:partial "
+fi
+
+log "=== Step 5: Vol/Issue 보완 (CrossRef + PubMed 재조회) ==="
+if python3 "${SCRIPT_DIR}/resolve_vol_issue.py" >> "$LOG_FILE" 2>&1; then
+    log "✅ Vol/Issue 보완 완료"
+    STATUS="${STATUS}vol_issue:ok "
+else
+    log "⚠️  Vol/Issue 보완 일부 실패 (exit: $?)"
+    STATUS="${STATUS}vol_issue:partial "
+fi
+
 find "$LOG_DIR" -name "*.log" -mtime +30 -delete 2>/dev/null
 
 log "=== 완료: ${STATUS}==="

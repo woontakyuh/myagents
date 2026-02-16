@@ -13,6 +13,7 @@ import urllib.request
 import time
 from datetime import datetime
 from llm_utils import check_llm_available, summarize_and_translate as llm_summarize, summarize_only, _clean_llm_header
+from fetch_papers import fetch_abstract_from_doi
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -61,12 +62,15 @@ def query_all_pages(database_id: str, token: str) -> list[dict]:
             doi_url = props.get("DOI", {}).get("url", "") or ""
             summary_parts = props.get("Summary", {}).get("rich_text", [])
             summary = summary_parts[0].get("plain_text", "") if summary_parts else ""
+            abstract_parts = props.get("Abstract", {}).get("rich_text", [])
+            abstract = abstract_parts[0].get("plain_text", "") if abstract_parts else ""
 
             pages.append({
                 "page_id": page["id"],
                 "title": title,
                 "doi_url": doi_url,
                 "summary": summary,
+                "abstract": abstract,
             })
 
         has_more = result.get("has_more", False)
@@ -117,17 +121,17 @@ def _chunk_text(text: str, size: int) -> list[str]:
         text = text[size:]
     return chunks
 
-def update_page(page_id: str, article: dict, token: str, use_llm: bool, config: dict = None) -> bool:
+def update_page(page_id: str, article: dict, token: str, use_llm: bool, config: dict | None = None) -> bool:
     pub_type = classify_pub_type(article)
 
     abstract = article.get("abstract", "")
     if use_llm and abstract:
-        summary_ko, translation_ko = llm_summarize(article["title"], abstract, config)
+        summary_ko, translation_ko = llm_summarize(article["title"], abstract, config or {})
     else:
         summary_ko = abstract[:100] if abstract else ""
         translation_ko = ""
 
-    props = {
+    props: dict[str, object] = {
         "Type": {"select": {"name": pub_type}},
     }
     volume = article.get("volume", "")
@@ -277,6 +281,102 @@ def fill_empty_summaries(database_id: str, token: str, config: dict):
     print(f"\n✅ Summary 채우기 완료: {filled}건 생성, {skipped_no_abstract}건 abstract 없음, {skipped_no_match}건 매칭실패, {failed}건 LLM 실패")
 
 
+def fill_abstracts(database_id: str, token: str, config: dict):
+    use_llm, llm_backend = check_llm_available(config)
+    if not use_llm:
+        print("❌ LLM 사용 불가 — GOOGLE_API_KEY 등 환경변수 확인")
+        return
+
+    print(f"🤖 LLM: {llm_backend}")
+    print("📋 Notion DB 조회 중...")
+    pages = query_all_pages(database_id, token)
+    print(f"   {len(pages)}건 조회됨")
+
+    targets = [p for p in pages if not p.get("summary", "").strip() and not p.get("abstract", "").strip()]
+    print(f"   Summary+Abstract 비어있음: {len(targets)}건")
+
+    files = sorted(glob.glob(os.path.join(DATA_DIR, "*.json")))
+    if not files:
+        print("❌ data/ 에 JSON 파일 없음")
+        return
+
+    all_articles = []
+    for f in files:
+        with open(f, "r", encoding="utf-8") as fh:
+            all_articles.extend(json.load(fh))
+
+    by_doi = {}
+    by_title = {}
+    for a in all_articles:
+        doi_url = a.get("doi_url", "")
+        if doi_url:
+            by_doi[doi_url] = a
+        title = a.get("title", "")
+        if title:
+            by_title[title.strip()[:50]] = a
+
+    updated = 0
+    skipped_no_match = 0
+    skipped_no_doi = 0
+    skipped_fetch_fail = 0
+    skipped_no_abstract = 0
+    failed_llm = 0
+    failed_notion = 0
+
+    for i, page in enumerate(targets):
+        try:
+            article = by_doi.get(page["doi_url"]) or by_title.get(page["title"][:50])
+            if not article:
+                skipped_no_match += 1
+                continue
+
+            abstract = article.get("abstract", "").strip()
+            if not abstract:
+                doi = article.get("doi", "").strip()
+                if not doi:
+                    skipped_no_doi += 1
+                    continue
+
+                abstract = fetch_abstract_from_doi(doi)
+                if not abstract:
+                    skipped_fetch_fail += 1
+                    print(f"  ⚠ [{i+1}/{len(targets)}] DOI abstract 실패: {page['title'][:50]}...")
+                    continue
+
+            if not abstract:
+                skipped_no_abstract += 1
+                continue
+
+            summary = summarize_only(article["title"], abstract, config)
+            if not summary:
+                time.sleep(3)
+                summary = summarize_only(article["title"], abstract, config)
+            if not summary:
+                failed_llm += 1
+                print(f"  ❌ [{i+1}/{len(targets)}] LLM 실패: {page['title'][:50]}...")
+                continue
+
+            props = {
+                "Summary": {"rich_text": [{"text": {"content": summary[:2000]}}]},
+            }
+            result = notion_api(f"pages/{page['page_id']}", {"properties": props}, token, method="PATCH")
+            if result:
+                updated += 1
+                print(f"  ✅ [{i+1}/{len(targets)}] {page['title'][:50]}...")
+            else:
+                failed_notion += 1
+                print(f"  ❌ [{i+1}/{len(targets)}] Notion 오류: {page['title'][:50]}...")
+        finally:
+            time.sleep(1.0)
+
+    print(
+        f"\n✅ Abstract 채우기 완료: {updated}건 업데이트, "
+        f"{skipped_no_match}건 매칭실패, {skipped_no_doi}건 DOI 없음, "
+        f"{skipped_fetch_fail}건 DOI 추출실패, {skipped_no_abstract}건 abstract 없음, "
+        f"{failed_llm}건 LLM 실패, {failed_notion}건 Notion 실패"
+    )
+
+
 def main():
     config = load_config()
     token = os.environ.get("NOTION_TOKEN") or config.get("notion_token", "")
@@ -292,6 +392,10 @@ def main():
 
     if "--fill-summary" in sys.argv:
         fill_empty_summaries(database_id, token, config)
+        return
+
+    if "--fill-abstract" in sys.argv:
+        fill_abstracts(database_id, token, config)
         return
 
     use_llm, llm_backend = check_llm_available(config)

@@ -176,8 +176,10 @@ def _call_claude_cli(prompt: str) -> Optional[str]:
     try:
         env = os.environ.copy()
         env.pop("CLAUDECODE", None)
+        full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
         result = subprocess.run(
-            ["claude", "-p", "--model", "haiku", prompt],
+            ["claude", "-p", "--model", "haiku"],
+            input=full_prompt,
             capture_output=True, text=True, timeout=120, env=env,
         )
         if result.returncode == 0 and result.stdout.strip():

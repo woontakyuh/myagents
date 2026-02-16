@@ -5,11 +5,15 @@ Usage: python fetch_papers.py [--journal "Spine J"] [--year 2026] [--days 30]
 """
 
 import urllib.request
+import urllib.error
+import urllib.parse
 import json
 import xml.etree.ElementTree as ET
 import time
 import argparse
 import os
+import re
+import html as html_mod
 from datetime import datetime, timedelta
 
 # ─── 설정 ─────────────────────────────────────────────
@@ -17,11 +21,70 @@ CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "data")
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
+def fetch_abstract_from_doi(doi: str) -> str:
+    if not doi:
+        return ""
+
+    doi = doi.strip()
+    if not doi:
+        return ""
+
+    doi_url = f"https://doi.org/{doi}"
+    headers = {"User-Agent": "JournalAlert/1.0"}
+
+    final_url = ""
+    try:
+        req = urllib.request.Request(doi_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            final_url = resp.geturl()
+    except Exception as e:
+        print(f"  ⚠ DOI 이동 실패 ({doi}): {e}")
+        return ""
+    finally:
+        time.sleep(0.5)
+
+    if not final_url:
+        return ""
+
+    domain = urllib.parse.urlparse(final_url).netloc.lower()
+    if domain.startswith("www."):
+        domain = domain[4:]
+
+    if domain != "link.springer.com":
+        return ""
+
+    try:
+        req = urllib.request.Request(final_url, headers=headers)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            page_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        print(f"  ⚠ DOI 본문 조회 실패 ({doi}): {e}")
+        return ""
+    finally:
+        time.sleep(0.5)
+
+    m = re.search(r'id="Abs1-content"[^>]*>(.*?)</div>', page_html, re.DOTALL)
+    if not m:
+        return ""
+
+    # 태그를 공백으로 치환 (구조화 abstract에서 라벨+본문 사이 공백 보존)
+    text = re.sub(r"<[^>]+>", " ", m.group(1))
+    text = html_mod.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    # 구조화 abstract 라벨 포맷팅: PurposeRobotic → Purpose: Robotic
+    text = re.sub(
+        r"(Purpose|Background|Objective|Methods?|Results?|Conclusions?|Study Design|Setting|Patients?|Outcome Measures?|Introduction|Discussion|Significance)"
+        r"(?=[A-Z])",
+        r"\1: ",
+        text,
+    )
+    return text
+
 def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
-def search_pubmed(journal_query: str, year: int = None, days: int = None, retmax: int = 500) -> list[str]:
+def search_pubmed(journal_query: str, year: int | None = None, days: int | None = None, retmax: int = 500) -> list[str]:
     """PubMed에서 논문 ID 검색"""
     term = f'"{journal_query}"[journal]'
     if year:
@@ -73,7 +136,7 @@ def fetch_details(pmids: list[str]) -> list[dict]:
     
     return articles
 
-def parse_article(article) -> dict:
+def parse_article(article) -> dict | None:
     """XML에서 논문 정보 추출"""
     # PMID
     pmid = article.findtext(".//PMID", "")
@@ -108,14 +171,18 @@ def parse_article(article) -> dict:
             abstract_parts.append(f"{label}: {text}")
         else:
             abstract_parts.append(text)
-    abstract = " ".join(abstract_parts)
-    
     # DOI
     doi = ""
     for aid in article.findall(".//ArticleId"):
         if aid.get("IdType") == "doi":
             doi = aid.text
             break
+
+    abstract = " ".join(abstract_parts)
+    if not abstract and doi:
+        abstract = fetch_abstract_from_doi(doi)
+        if abstract:
+            print(f"  📥 DOI fallback abstract: {pmid} ({len(abstract)} chars)")
     
     # Journal info
     journal = article.findtext(".//Journal/Title", "")
@@ -180,9 +247,9 @@ def extract_pub_date(article) -> str:
     """출판일 추출 → YYYY-MM-DD or YYYY-MM or YYYY"""
     # ArticleDate (epub) 우선
     for ad in article.findall(".//ArticleDate"):
-        y = ad.findtext("Year", "")
-        m = ad.findtext("Month", "")
-        d = ad.findtext("Day", "")
+        y = ad.findtext("Year") or ""
+        m = ad.findtext("Month") or ""
+        d = ad.findtext("Day") or ""
         if y:
             parts = [y]
             if m: parts.append(m.zfill(2))
@@ -191,16 +258,18 @@ def extract_pub_date(article) -> str:
     
     # PubDate
     for pd in article.findall(".//PubDate"):
-        y = pd.findtext("Year", "")
-        m = pd.findtext("Month", "")
-        d = pd.findtext("Day", "")
+        y = pd.findtext("Year") or ""
+        m = pd.findtext("Month") or ""
+        d = pd.findtext("Day") or ""
         if y:
             parts = [y]
             if m:
                 # Month가 "Jan" 같은 문자일 수 있음
                 month_map = {"Jan":"01","Feb":"02","Mar":"03","Apr":"04","May":"05","Jun":"06",
                              "Jul":"07","Aug":"08","Sep":"09","Oct":"10","Nov":"11","Dec":"12"}
-                m = month_map.get(m, m).zfill(2)
+                if m in month_map:
+                    m = month_map[m]
+                m = m.zfill(2)
                 parts.append(m)
             if d: parts.append(d.zfill(2))
             return "-".join(parts)
@@ -311,8 +380,6 @@ def main():
             save_results(articles, jkey, str(year))
             print_summary(articles)
             return articles
-
-import urllib.parse
 
 if __name__ == "__main__":
     main()
