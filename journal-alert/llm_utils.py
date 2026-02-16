@@ -16,6 +16,15 @@ import shutil
 import urllib.request
 from typing import Optional
 
+SYSTEM_PROMPT = (
+    "You are a medical research assistant specializing in spine surgery. "
+    "Respond concisely in Korean. "
+    "척추 분야 용어 규칙: "
+    "cervical=경추, thoracic=흉추, lumbar=요추, sacral=천추. "
+    "UBE, ACDF, TLIF, OLIF, MIS 등 척추외과 약어는 한글 부연설명 없이 그대로 사용. "
+    "절대 cervical을 자궁경부로 번역하지 마세요."
+)
+
 
 def call_llm(prompt: str, config: dict = None) -> Optional[str]:
     """
@@ -61,7 +70,7 @@ def _call_gemini(prompt: str, llm_config: dict) -> Optional[str]:
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "systemInstruction": {
-            "parts": [{"text": "You are a medical research assistant specializing in spine surgery. Respond concisely."}]
+            "parts": [{"text": SYSTEM_PROMPT}]
         },
         "generationConfig": {
             "temperature": 0.3,
@@ -100,7 +109,7 @@ def _call_openai(prompt: str, llm_config: dict) -> Optional[str]:
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "You are a medical research assistant specializing in spine surgery. Respond concisely."},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.3,
@@ -137,7 +146,7 @@ def _call_anthropic(prompt: str, llm_config: dict) -> Optional[str]:
         "messages": [
             {"role": "user", "content": prompt},
         ],
-        "system": "You are a medical research assistant specializing in spine surgery. Respond concisely.",
+        "system": SYSTEM_PROMPT,
     }
 
     url = "https://api.anthropic.com/v1/messages"
@@ -217,22 +226,131 @@ def summarize_and_translate(title: str, abstract: str, config: dict = None) -> t
 Abstract:
 {abstract}
 
-다음 2가지를 출력하세요. 구분자 "---" 를 사이에 넣으세요.
+아래 형식 그대로 출력하세요. 제목, 헤더, 라벨, 번호 매기기 등 절대 붙이지 마세요.
+"# 1줄 요약", "[1줄 요약]", "**1줄 요약**", "1)", "2)" 같은 것 붙이면 안 됩니다.
+오직 요약문과 번역문 본문만 출력하세요.
 
-1) 이 논문의 결론을 한글 1줄로 요약 (50자 내외, 핵심 수치 포함). 의학용어는 영문 병기.
-2) Abstract 전체를 한글로 번역 (의학용어 영문 병기, 원문 구조 유지).
-
-형식:
-[1줄 요약]
+(한글 1줄 요약 — 50자 내외, 핵심 수치 포함, 의학용어 영문 병기)
 ---
-[한글 번역]"""
+(Abstract 한글 번역 — 의학용어 영문 병기, 원문 구조 유지)"""
 
     result = call_llm(prompt, config)
     if not result:
         return abstract[:100] if abstract else "", ""
 
     parts = result.split("---", 1)
-    summary = parts[0].strip()
-    translation = parts[1].strip() if len(parts) > 1 else ""
+    summary = _clean_llm_header(parts[0].strip())
+    translation = _clean_llm_header(parts[1].strip()) if len(parts) > 1 else ""
+
+    if not summary and abstract:
+        summary = summarize_only(title, abstract, config)
 
     return summary, translation
+
+
+def summarize_only(title: str, abstract: str, config: dict = None) -> str:
+    if not abstract:
+        return ""
+
+    prompt = f"""논문 제목: {title}
+
+Abstract:
+{abstract}
+
+이 논문의 핵심 결론을 한글 한 문장으로 요약하세요 (50자 내외).
+의학용어는 영문 병기. 헤더, 라벨, 번호, 마크다운 서식 일절 금지.
+오직 요약 문장 하나만 출력하세요."""
+
+    result = call_llm(prompt, config)
+    if not result:
+        return ""
+    return _clean_llm_header(result.strip())
+
+
+def _clean_llm_header(text: str) -> str:
+    import re
+    if not text or not text.strip():
+        return ""
+
+    full = text.strip()
+
+    _REFUSE = [
+        "도움을 드릴 수 없습니다",
+        "소프트웨어 엔지니어링과 무관한",
+        "코드 작성 및 디버깅",
+        "프로그래밍이나 개발 관련",
+    ]
+    if any(r in full for r in _REFUSE):
+        return ""
+
+    _PREAMBLE_RE = re.compile(
+        r'^(저는\s*이\s*논문|이\s*작업은\s*논문|이\s*논문의\s*요약|요청하신\s*형식으로|다음은\s*논문)',
+        re.MULTILINE,
+    )
+
+    # label keywords used in various header formats
+    _LABEL = (
+        r'1줄\s*요약|한글\s*(1줄\s*)?요약(\s*및\s*번역)?|한글\s*번역|'
+        r'논문\s*요약(\s*및\s*번역)?|논문\s*분석(\s*결과)?|'
+        r'결론\s*(1줄\s*)?요약|'
+        r'요약|Summary|Translation'
+    )
+
+    _PROMPT_LEAK_RE = re.compile(
+        r'^\(?\s*\d*자\s*내외.*\)?\s*:?\s*\**\s*$'
+    )
+
+    _PASTED_RE = re.compile(r'^\[Pasted\s*~?\d+')
+
+    lines = full.splitlines()
+    cleaned = []
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+
+        if _PREAMBLE_RE.match(s):
+            continue
+
+        if _PASTED_RE.match(s):
+            continue
+
+        if _PROMPT_LEAK_RE.match(s):
+            continue
+
+        # standalone ** or *** (bold markers with no content)
+        if re.match(r'^\*{2,3}$', s):
+            continue
+
+        # markdown heading → strip the # prefix
+        s = re.sub(r'^#{1,4}\s+', '', s)
+
+        # numbered prefix: 1) 2)
+        s = re.sub(r'^[12]\)\s*', '', s)
+
+        # **label** or **label**: or **[label]**: or [label] — with any combo of **, [], :
+        s = re.sub(
+            rf'^[\*\[\s]*({_LABEL})[\]\*\s]*:?\s*',
+            '', s, flags=re.IGNORECASE,
+        )
+
+        # **목표**: style bold-label prefix
+        s = re.sub(r'^\*\*([^*]{1,10})\*\*\s*:\s*', '', s)
+
+        # strip wrapping bold from entire line: **content** → content
+        if s.startswith('**') and s.endswith('**') and len(s) > 4:
+            inner = s[2:-2].strip()
+            if inner and not re.match(rf'^({_LABEL})$', inner, re.IGNORECASE):
+                s = inner
+
+        # leading ** without closing (partial bold)
+        if s.startswith('**') and '**' not in s[2:]:
+            s = s[2:].strip()
+
+        if not s:
+            continue
+
+        cleaned.append(s)
+
+    return "\n".join(cleaned).strip()
