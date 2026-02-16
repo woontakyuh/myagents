@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 import time
 from datetime import datetime
-from llm_utils import check_llm_available, summarize_and_translate as llm_summarize
+from llm_utils import check_llm_available, summarize_and_translate as llm_summarize, summarize_only, _clean_llm_header
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
@@ -54,18 +54,19 @@ def query_all_pages(database_id: str, token: str) -> list[dict]:
 
         for page in result.get("results", []):
             props = page.get("properties", {})
-            # Title
             title = ""
             title_prop = props.get("Title", {}).get("title", [])
             if title_prop:
                 title = title_prop[0].get("plain_text", "").strip()
-            # DOI
             doi_url = props.get("DOI", {}).get("url", "") or ""
+            summary_parts = props.get("Summary", {}).get("rich_text", [])
+            summary = summary_parts[0].get("plain_text", "") if summary_parts else ""
 
             pages.append({
                 "page_id": page["id"],
                 "title": title,
                 "doi_url": doi_url,
+                "summary": summary,
             })
 
         has_more = result.get("has_more", False)
@@ -135,6 +136,8 @@ def update_page(page_id: str, article: dict, token: str, use_llm: bool, config: 
         props["Vol"] = {"rich_text": [{"text": {"content": volume}}]}
     if issue:
         props["Issue"] = {"rich_text": [{"text": {"content": issue}}]}
+    if article.get("affiliation"):
+        props["Affiliations"] = {"rich_text": [{"text": {"content": article["affiliation"][:2000]}}]}
 
     if summary_ko:
         props["Summary"] = {"rich_text": [{"text": {"content": summary_ko[:2000]}}]}
@@ -163,6 +166,117 @@ def update_page(page_id: str, article: dict, token: str, use_llm: bool, config: 
     return True
 
 
+def clean_summaries(database_id: str, token: str):
+    """기존 Notion Summary 필드에서 헤더/라벨 제거."""
+    import re
+    print("📋 Notion DB 조회 중...")
+    pages = query_all_pages(database_id, token)
+    print(f"   {len(pages)}건 조회됨")
+
+    cleaned = 0
+    emptied = 0
+    skipped = 0
+
+    for i, page in enumerate(pages):
+        summary = page.get("summary", "")
+        if not summary:
+            skipped += 1
+            continue
+
+        new_summary = _clean_llm_header(summary)
+        if new_summary == summary:
+            skipped += 1
+            continue
+
+        if new_summary:
+            props = {"Summary": {"rich_text": [{"text": {"content": new_summary[:2000]}}]}}
+        else:
+            props = {"Summary": {"rich_text": []}}
+
+        result = notion_api(f"pages/{page['page_id']}", {"properties": props}, token, method="PATCH")
+        if result:
+            if new_summary:
+                cleaned += 1
+                print(f"  🧹 [{i+1}/{len(pages)}] {page['title'][:50]}...")
+            else:
+                emptied += 1
+                print(f"  🗑️ [{i+1}/{len(pages)}] 내용 없음 → 비움: {page['title'][:50]}...")
+        else:
+            print(f"  ❌ [{i+1}/{len(pages)}] {page['title'][:50]}...")
+
+        time.sleep(0.35)
+
+    print(f"\n✅ Summary 정리 완료: {cleaned}건 수정, {emptied}건 비움 (내용 없음), {skipped}건 정상")
+
+
+def fill_empty_summaries(database_id: str, token: str, config: dict):
+    use_llm, llm_backend = check_llm_available(config)
+    if not use_llm:
+        print("❌ LLM 사용 불가 — GOOGLE_API_KEY 등 환경변수 확인")
+        return
+
+    print(f"🤖 LLM: {llm_backend}")
+    print("📋 Notion DB 조회 중...")
+    pages = query_all_pages(database_id, token)
+    print(f"   {len(pages)}건 조회됨")
+
+    empty_pages = [p for p in pages if not p.get("summary", "").strip()]
+    print(f"   Summary 비어있음: {len(empty_pages)}건")
+
+    files = sorted(glob.glob(os.path.join(DATA_DIR, "*.json")))
+    if not files:
+        print("❌ data/ 에 JSON 파일 없음")
+        return
+
+    all_articles = []
+    for f in files:
+        with open(f, "r", encoding="utf-8") as fh:
+            all_articles.extend(json.load(fh))
+
+    by_doi = {}
+    by_title = {}
+    for a in all_articles:
+        if a.get("doi_url"):
+            by_doi[a["doi_url"]] = a
+        if a.get("title"):
+            by_title[a["title"].strip()[:50]] = a
+
+    filled = 0
+    skipped_no_match = 0
+    skipped_no_abstract = 0
+    failed = 0
+
+    for i, page in enumerate(empty_pages):
+        article = by_doi.get(page["doi_url"]) or by_title.get(page["title"][:50])
+        if not article:
+            skipped_no_match += 1
+            continue
+
+        abstract = article.get("abstract", "").strip()
+        if not abstract:
+            skipped_no_abstract += 1
+            continue
+
+        summary = summarize_only(article["title"], abstract, config)
+        if not summary:
+            failed += 1
+            print(f"  ❌ [{i+1}/{len(empty_pages)}] LLM 실패: {page['title'][:50]}...")
+            continue
+
+        props = {"Summary": {"rich_text": [{"text": {"content": summary[:2000]}}]}}
+        result = notion_api(f"pages/{page['page_id']}", {"properties": props}, token, method="PATCH")
+        if result:
+            filled += 1
+            print(f"  ✅ [{i+1}/{len(empty_pages)}] {page['title'][:50]}...")
+        else:
+            failed += 1
+            print(f"  ❌ [{i+1}/{len(empty_pages)}] Notion 오류: {page['title'][:50]}...")
+
+        time.sleep(0.5)
+
+    print(f"\n✅ Summary 채우기 완료: {filled}건 생성, {skipped_no_abstract}건 abstract 없음, {skipped_no_match}건 매칭실패, {failed}건 LLM 실패")
+
+
 def main():
     config = load_config()
     token = os.environ.get("NOTION_TOKEN") or config.get("notion_token", "")
@@ -172,18 +286,24 @@ def main():
 
     database_id = config["notion_database_id"]
 
+    if "--clean-summary" in sys.argv:
+        clean_summaries(database_id, token)
+        return
+
+    if "--fill-summary" in sys.argv:
+        fill_empty_summaries(database_id, token, config)
+        return
+
     use_llm, llm_backend = check_llm_available(config)
     if use_llm:
         print(f"🤖 LLM 감지: {llm_backend} — 한글 요약/번역 생성")
     else:
         print("⚠️  LLM 미설정 — Type만 업데이트")
 
-    # 1. Notion 기존 페이지 조회
     print("📋 Notion DB 조회 중...")
     pages = query_all_pages(database_id, token)
     print(f"   {len(pages)}건 조회됨")
 
-    # 2. 데이터 JSON 로드
     files = sorted(glob.glob(os.path.join(DATA_DIR, "*.json")))
     if not files:
         print("❌ data/ 에 JSON 파일 없음")
@@ -194,7 +314,6 @@ def main():
         articles = json.load(f)
     print(f"📂 {os.path.basename(files[-1])} ({len(articles)}편)")
 
-    # 3. DOI/Title로 매칭 인덱스 구축
     by_doi = {}
     by_title = {}
     for a in articles:
@@ -203,13 +322,11 @@ def main():
         if a.get("title"):
             by_title[a["title"].strip()[:50]] = a
 
-    # 4. 업데이트
     updated = 0
     skipped = 0
     failed = 0
 
     for i, page in enumerate(pages):
-        # 매칭
         article = by_doi.get(page["doi_url"]) or by_title.get(page["title"][:50])
         if not article:
             skipped += 1
@@ -223,7 +340,7 @@ def main():
         else:
             failed += 1
 
-        time.sleep(0.5)  # rate limit (Claude CLI + Notion)
+        time.sleep(0.5)
 
     print(f"\n✅ 완료: 업데이트 {updated}건, 매칭실패 {skipped}건, 오류 {failed}건")
 
