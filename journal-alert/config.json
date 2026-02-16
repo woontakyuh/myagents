@@ -18,7 +18,7 @@
 
   "journals": {
     "spinej": {
-      "name": "The Spine Journal",
+      "name": "TSJ",
       "pubmed_query": "Spine J",
       "issn": "1529-9430"
     },
@@ -28,7 +28,7 @@
       "issn": "0362-2436"
     },
     "jns_spine": {
-      "name": "J Neurosurg Spine",
+      "name": "JNS Spine",
       "pubmed_query": "J Neurosurg Spine",
       "issn": "1547-5654"
     },
@@ -38,12 +38,12 @@
       "issn": "2586-6583"
     },
     "eur_spine_j": {
-      "name": "European Spine Journal",
+      "name": "ESJ",
       "pubmed_query": "Eur Spine J",
       "issn": "0940-6719"
     },
     "global_spine_j": {
-      "name": "Global Spine Journal",
+      "name": "GSJ",
       "pubmed_query": "Global Spine J",
       "issn": "2192-5682"
     }
