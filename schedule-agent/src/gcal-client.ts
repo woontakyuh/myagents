@@ -80,6 +80,54 @@ export async function findGoogleCalendarEvent(name: string, dateStart: string): 
   return { exists: false };
 }
 
+export async function updateGoogleCalendarEvent(
+  oldName: string,
+  oldDateStart: string,
+  updates: { name?: string; dateStart?: string; dateEnd?: string; place?: string; description?: string },
+): Promise<GCalResult> {
+  const auth = await getAuthorizedClient();
+  if (!auth) {
+    return { success: false, message: "Google Calendar not configured." };
+  }
+
+  const found = await findGoogleCalendarEvent(oldName, oldDateStart);
+  if (!found.exists || !found.eventId) {
+    return { success: false, message: "Google Calendar에서 해당 이벤트를 찾을 수 없습니다." };
+  }
+
+  const calendar = google.calendar({ version: "v3", auth });
+  const patch: calendar_v3.Schema$Event = {};
+
+  if (updates.name) patch.summary = updates.name;
+  if (updates.place) patch.location = updates.place;
+  if (updates.description) patch.description = updates.description;
+  if (updates.dateStart) {
+    patch.start = { date: updates.dateStart, timeZone: "Asia/Seoul" };
+    patch.end = {
+      date: updates.dateEnd ? nextDay(updates.dateEnd) : nextDay(updates.dateStart),
+      timeZone: "Asia/Seoul",
+    };
+  } else if (updates.dateEnd) {
+    const existing = await calendar.events.get({ calendarId: "primary", eventId: found.eventId });
+    const existingStart = existing.data.start?.date ?? oldDateStart;
+    patch.start = { date: existingStart, timeZone: "Asia/Seoul" };
+    patch.end = { date: nextDay(updates.dateEnd), timeZone: "Asia/Seoul" };
+  }
+
+  const res = await calendar.events.patch({
+    calendarId: "primary",
+    eventId: found.eventId,
+    requestBody: patch,
+  });
+
+  return {
+    success: true,
+    message: "Google Calendar 이벤트가 수정되었습니다.",
+    eventId: res.data.id ?? undefined,
+    eventUrl: res.data.htmlLink ?? undefined,
+  };
+}
+
 function nextDay(dateStr: string): string {
   const [year, month, day] = dateStr.split("-").map(Number);
   const d = new Date(year, month - 1, day + 1);
