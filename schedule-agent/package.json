@@ -1,0 +1,21 @@
+{
+  "name": "schedule-agent",
+  "version": "1.0.0",
+  "description": "MCP server for schedule management with Notion and Dropbox",
+  "type": "module",
+  "bin": {
+    "schedule-agent": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "typescript": "^5.9.3"
+  }
+}
