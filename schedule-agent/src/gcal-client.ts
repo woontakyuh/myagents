@@ -16,6 +16,46 @@ export interface GCalEventInput {
   description?: string;
 }
 
+const TIMEZONE = "Asia/Seoul";
+
+function hasTimeComponent(dateStr: string): boolean {
+  return dateStr.includes("T");
+}
+
+function extractDate(dateStr: string): string {
+  return dateStr.slice(0, 10);
+}
+
+// Append +09:00 (KST) if no timezone offset present — prevents UTC misinterpretation
+function ensureTimezone(dateTimeStr: string): string {
+  if (/[+-]\d{2}:\d{2}$/u.test(dateTimeStr) || dateTimeStr.endsWith("Z")) {
+    return dateTimeStr;
+  }
+  return `${dateTimeStr}+09:00`;
+}
+
+function buildEventTiming(
+  dateStart: string,
+  dateEnd?: string,
+): { start: calendar_v3.Schema$EventDateTime; end: calendar_v3.Schema$EventDateTime } {
+  const isTimed = hasTimeComponent(dateStart);
+
+  if (isTimed) {
+    const endStr = dateEnd && hasTimeComponent(dateEnd)
+      ? ensureTimezone(dateEnd)
+      : ensureTimezone(dateStart);
+    return {
+      start: { dateTime: ensureTimezone(dateStart), timeZone: TIMEZONE },
+      end: { dateTime: endStr, timeZone: TIMEZONE },
+    };
+  }
+
+  return {
+    start: { date: extractDate(dateStart), timeZone: TIMEZONE },
+    end: { date: dateEnd ? nextDay(extractDate(dateEnd)) : nextDay(extractDate(dateStart)), timeZone: TIMEZONE },
+  };
+}
+
 export async function createGoogleCalendarEvent(input: GCalEventInput): Promise<GCalResult> {
   const auth = await getAuthorizedClient();
   if (!auth) {
@@ -26,19 +66,14 @@ export async function createGoogleCalendarEvent(input: GCalEventInput): Promise<
   }
 
   const calendar = google.calendar({ version: "v3", auth });
+  const timing = buildEventTiming(input.dateStart, input.dateEnd);
 
   const event: calendar_v3.Schema$Event = {
     summary: input.name,
     location: input.place,
     description: input.description,
-    start: {
-      date: input.dateStart,
-      timeZone: "Asia/Seoul",
-    },
-    end: {
-      date: input.dateEnd ? nextDay(input.dateEnd) : nextDay(input.dateStart),
-      timeZone: "Asia/Seoul",
-    },
+    start: timing.start,
+    end: timing.end,
   };
 
   const res = await calendar.events.insert({
@@ -60,11 +95,12 @@ export async function findGoogleCalendarEvent(name: string, dateStart: string): 
     return { exists: false };
   }
 
+  const dateOnly = extractDate(dateStart);
   const calendar = google.calendar({ version: "v3", auth });
   const res = await calendar.events.list({
     calendarId: "primary",
-    timeMin: `${dateStart}T00:00:00+09:00`,
-    timeMax: `${nextDay(dateStart)}T00:00:00+09:00`,
+    timeMin: `${dateOnly}T00:00:00+09:00`,
+    timeMax: `${nextDay(dateOnly)}T00:00:00+09:00`,
     q: name,
     singleEvents: true,
     maxResults: 5,
@@ -102,16 +138,15 @@ export async function updateGoogleCalendarEvent(
   if (updates.place) patch.location = updates.place;
   if (updates.description) patch.description = updates.description;
   if (updates.dateStart) {
-    patch.start = { date: updates.dateStart, timeZone: "Asia/Seoul" };
-    patch.end = {
-      date: updates.dateEnd ? nextDay(updates.dateEnd) : nextDay(updates.dateStart),
-      timeZone: "Asia/Seoul",
-    };
+    const timing = buildEventTiming(updates.dateStart, updates.dateEnd);
+    patch.start = timing.start;
+    patch.end = timing.end;
   } else if (updates.dateEnd) {
     const existing = await calendar.events.get({ calendarId: "primary", eventId: found.eventId });
-    const existingStart = existing.data.start?.date ?? oldDateStart;
-    patch.start = { date: existingStart, timeZone: "Asia/Seoul" };
-    patch.end = { date: nextDay(updates.dateEnd), timeZone: "Asia/Seoul" };
+    const existingStart = existing.data.start?.dateTime ?? existing.data.start?.date ?? oldDateStart;
+    const timing = buildEventTiming(existingStart, updates.dateEnd);
+    patch.start = timing.start;
+    patch.end = timing.end;
   }
 
   const res = await calendar.events.patch({
