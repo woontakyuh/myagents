@@ -23,7 +23,7 @@ export function registerAddScheduleTool(
       date_start: z.string().min(1),
       date_end: z.string().optional(),
       place: z.string().optional(),
-      category: z.string().optional(),
+      category: z.string().default("Spine"),
       society: z.array(z.string()).optional(),
       status: z.string().optional(),
       topic: z.string().optional(),
