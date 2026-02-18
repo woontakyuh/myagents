@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { DropboxService } from "../dropbox-service.js";
-import { createGoogleCalendarEvent, GCalResult } from "../gcal-client.js";
+import { createGoogleCalendarEvent, findGoogleCalendarEvent, GCalResult } from "../gcal-client.js";
 import { NotionScheduleClient, ScheduleMutationInput } from "../notion-client.js";
 
 interface AddScheduleParams extends ScheduleMutationInput {
@@ -33,30 +33,55 @@ export function registerAddScheduleTool(
     },
     async (params: AddScheduleParams) => {
       try {
-        const created = await notionClient.addSchedule(params);
+        const notionDup = await notionClient.findDuplicate(params.name, params.date_start);
+        let gcalDup: { exists: boolean; eventId?: string; eventUrl?: string } = { exists: false };
+        try {
+          gcalDup = await findGoogleCalendarEvent(params.name, params.date_start);
+        } catch {
+        }
+
+        if (notionDup && gcalDup.exists) {
+          return {
+            content: [{ type: "text", text: JSON.stringify({
+              success: false,
+              message: "이미 등록된 일정입니다 (Notion + Google Calendar 모두 존재).",
+              notion: { page_id: notionDup.page_id, url: notionDup.url, name: notionDup.name, date: notionDup.date_start },
+              google_calendar: { eventId: gcalDup.eventId, eventUrl: gcalDup.eventUrl },
+            }, null, 2) }],
+          };
+        }
+
+        let notionResult: Record<string, unknown>;
+        if (notionDup) {
+          notionResult = { skipped: true, message: "이미 Notion에 등록되어 있습니다.", page_id: notionDup.page_id, url: notionDup.url };
+        } else {
+          const created = await notionClient.addSchedule(params);
+          notionResult = { success: true, schedule: created };
+        }
 
         let gcalResult: GCalResult;
-        try {
-          gcalResult = await createGoogleCalendarEvent({
-            name: params.name,
-            dateStart: params.date_start,
-            dateEnd: params.date_end,
-            place: params.place,
-            description: params.topic,
-          });
-        } catch (error) {
-          gcalResult = {
-            success: false,
-            message: `Google Calendar error: ${error instanceof Error ? error.message : String(error)}`,
-          };
+        if (gcalDup.exists) {
+          gcalResult = { success: false, message: "이미 Google Calendar에 등록되어 있습니다.", eventId: gcalDup.eventId, eventUrl: gcalDup.eventUrl };
+        } else {
+          try {
+            gcalResult = await createGoogleCalendarEvent({
+              name: params.name,
+              dateStart: params.date_start,
+              dateEnd: params.date_end,
+              place: params.place,
+              description: params.topic,
+            });
+          } catch (error) {
+            gcalResult = {
+              success: false,
+              message: `Google Calendar error: ${error instanceof Error ? error.message : String(error)}`,
+            };
+          }
         }
 
         const response: Record<string, unknown> = {
           success: true,
-          notion: {
-            success: true,
-            schedule: created,
-          },
+          notion: notionResult,
           google_calendar: gcalResult,
         };
 

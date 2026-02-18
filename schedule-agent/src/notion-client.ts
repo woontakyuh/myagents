@@ -169,6 +169,29 @@ export class NotionScheduleClient {
     };
   }
 
+  public async findDuplicate(name: string, dateStart: string): Promise<ScheduleListItem | null> {
+    const response = await this.request<NotionQueryResponse>(
+      `/databases/${this.databaseId}/query`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filter: {
+            and: [
+              { property: "Name", title: { equals: name } },
+              { property: "Date", date: { equals: dateStart } },
+            ],
+          },
+          page_size: 1,
+        }),
+      },
+    );
+
+    if (response.results.length > 0) {
+      return this.toScheduleListItem(response.results[0]);
+    }
+    return null;
+  }
+
   public async addSchedule(input: ScheduleMutationInput): Promise<SchedulePageDetails> {
     if (!input.name) {
       throw new Error("name is required");

@@ -54,8 +54,37 @@ export async function createGoogleCalendarEvent(input: GCalEventInput): Promise<
   };
 }
 
+export async function findGoogleCalendarEvent(name: string, dateStart: string): Promise<{ exists: boolean; eventId?: string; eventUrl?: string }> {
+  const auth = await getAuthorizedClient();
+  if (!auth) {
+    return { exists: false };
+  }
+
+  const calendar = google.calendar({ version: "v3", auth });
+  const res = await calendar.events.list({
+    calendarId: "primary",
+    timeMin: `${dateStart}T00:00:00+09:00`,
+    timeMax: `${nextDay(dateStart)}T00:00:00+09:00`,
+    q: name,
+    singleEvents: true,
+    maxResults: 5,
+  });
+
+  const match = (res.data.items ?? []).find(
+    (e) => e.summary?.toLowerCase() === name.toLowerCase(),
+  );
+
+  if (match) {
+    return { exists: true, eventId: match.id ?? undefined, eventUrl: match.htmlLink ?? undefined };
+  }
+  return { exists: false };
+}
+
 function nextDay(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00`);
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().slice(0, 10);
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const d = new Date(year, month - 1, day + 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
 }

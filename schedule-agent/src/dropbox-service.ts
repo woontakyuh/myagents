@@ -27,13 +27,12 @@ export class DropboxService {
     const safeName = this.sanitizeName(name);
     const fullPath = join(this.basePath, year, `${date} ${safeName}`);
 
-    const existed = existsSync(fullPath);
-    mkdirSync(fullPath, { recursive: true });
+    if (existsSync(fullPath)) {
+      return { path: fullPath, existed: true };
+    }
 
-    return {
-      path: fullPath,
-      existed,
-    };
+    mkdirSync(fullPath, { recursive: true });
+    return { path: fullPath, existed: false };
   }
 
   private validateDate(date: string): void {
