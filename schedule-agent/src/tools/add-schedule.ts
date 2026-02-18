@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { DropboxService } from "../dropbox-service.js";
-import { createGoogleCalendarEvent } from "../gcal-client.js";
+import { createGoogleCalendarEvent, GCalResult } from "../gcal-client.js";
 import { NotionScheduleClient, ScheduleMutationInput } from "../notion-client.js";
 
 interface AddScheduleParams extends ScheduleMutationInput {
@@ -17,6 +17,7 @@ export function registerAddScheduleTool(
 ): void {
   server.tool(
     "add_schedule",
+    "Add a new schedule to Notion and Google Calendar. Set create_folder=true only when the user explicitly says they will attend this event - this creates a Dropbox preparation folder.",
     {
       name: z.string().min(1),
       date_start: z.string().min(1),
@@ -34,16 +35,28 @@ export function registerAddScheduleTool(
       try {
         const created = await notionClient.addSchedule(params);
 
-        const gcalResult = await createGoogleCalendarEvent({
-          name: params.name,
-          dateStart: params.date_start,
-          dateEnd: params.date_end,
-          place: params.place,
-        });
+        let gcalResult: GCalResult;
+        try {
+          gcalResult = await createGoogleCalendarEvent({
+            name: params.name,
+            dateStart: params.date_start,
+            dateEnd: params.date_end,
+            place: params.place,
+            description: params.topic,
+          });
+        } catch (error) {
+          gcalResult = {
+            success: false,
+            message: `Google Calendar error: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
 
         const response: Record<string, unknown> = {
           success: true,
-          schedule: created,
+          notion: {
+            success: true,
+            schedule: created,
+          },
           google_calendar: gcalResult,
         };
 

@@ -8,10 +8,12 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "setup": "node build/auth-setup.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "googleapis": "^171.4.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
