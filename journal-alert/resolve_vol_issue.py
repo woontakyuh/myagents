@@ -10,6 +10,8 @@ Usage:
 - python3 resolve_vol_issue.py --pubmed-only
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import json

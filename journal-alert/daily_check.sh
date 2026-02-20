@@ -55,6 +55,7 @@ if [ "$NEW_COUNT" -gt 0 ] 2>/dev/null; then
     else
         log "❌ 이메일 실패"
     fi
+    find "${SCRIPT_DIR}/data" -name "new_*.json" -mtime +7 -delete 2>/dev/null
 else
     log "ℹ️  신규 논문 없음 — 이메일 생략"
 fi

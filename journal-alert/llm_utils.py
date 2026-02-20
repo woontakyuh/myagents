@@ -9,6 +9,8 @@ LLM 유틸리티 — 여러 백엔드 지원. 외부 의존성 없이 stdlib만 
   (없으면)            → Claude CLI (Max 구독 인증 사용)
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess

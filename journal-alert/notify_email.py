@@ -6,6 +6,8 @@ Usage: python notify_email.py --latest
        python notify_email.py --latest --dry-run
 """
 
+from __future__ import annotations
+
 import smtplib
 import json
 import os
@@ -199,11 +201,16 @@ def main():
 
     # 입력 파일 결정
     if args.latest:
-        files = glob.glob(os.path.join(DATA_DIR, "*.json"))
-        if not files:
-            print("❌ data/ 에 JSON 파일 없음")
-            sys.exit(1)
-        input_files = [max(files, key=os.path.getmtime)]
+        new_files = glob.glob(os.path.join(DATA_DIR, "new_*.json"))
+        if new_files:
+            input_files = [max(new_files, key=os.path.getmtime)]
+        else:
+            files = glob.glob(os.path.join(DATA_DIR, "*.json"))
+            if not files:
+                print("❌ data/ 에 JSON 파일 없음")
+                sys.exit(1)
+            input_files = [max(files, key=os.path.getmtime)]
+            print("⚠️  new_*.json 없음 — 전체 파일 사용 (신규 필터링 안 됨)")
     elif args.data:
         input_files = args.data
     else:

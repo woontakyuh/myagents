@@ -6,6 +6,8 @@ Usage: python push_to_notion.py [data/spinej_2026_*.json]
        python push_to_notion.py --all             # data/ 전체
 """
 
+from __future__ import annotations
+
 import json
 import os
 import sys
@@ -382,6 +384,7 @@ def main():
     # 논문 push
     total_new = 0
     total_skip = 0
+    new_articles = []  # 신규 논문 목록 (이메일 알림용)
 
     for filepath in input_files:
         print(f"\n📂 {os.path.basename(filepath)}")
@@ -405,11 +408,19 @@ def main():
                 total_new += 1
                 existing.add(doi_url)
                 existing.add(title_key)
+                new_articles.append(article)
                 print(f"  {emoji} [{i+1}/{len(articles)}] {article['title'][:60]}...")
             else:
                 print(f"  ❌ [{i+1}/{len(articles)}] 실패: {article['title'][:40]}...")
 
             time.sleep(0.35)  # Notion rate limit
+
+    # 신규 논문을 별도 JSON으로 저장 (notify_email.py용)
+    if new_articles:
+        new_file = os.path.join(data_dir, f"new_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        with open(new_file, "w", encoding="utf-8") as f:
+            json.dump(new_articles, f, ensure_ascii=False, indent=2)
+        print(f"  📧 신규 논문 저장: {os.path.basename(new_file)} ({len(new_articles)}건)")
 
     print(f"\n✅ 완료: 새로 추가 {total_new}건, 중복 스킵 {total_skip}건")
     return total_new

@@ -12,6 +12,8 @@ The Spine Journal TOC PDF를 파싱해 Vol/Issue 누락 Notion 페이지를 보�
   venv 활성화 후 실행하거나 `.venv/bin/python3`로 실행하세요.
 """
 
+from __future__ import annotations
+
 import argparse
 import difflib
 import glob

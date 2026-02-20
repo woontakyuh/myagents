@@ -4,6 +4,8 @@ PubMed E-utilities로 저널 논문 수집
 Usage: python fetch_papers.py [--journal "Spine J"] [--year 2026] [--days 30]
 """
 
+from __future__ import annotations
+
 import urllib.request
 import urllib.error
 import urllib.parse
