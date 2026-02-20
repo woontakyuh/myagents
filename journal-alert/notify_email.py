@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-새 논문 알림 이메일 발송
+새 논문 알림 이메일 발송 (HTML)
 Usage: python notify_email.py --latest
        python notify_email.py --latest --status "fetch:ok push:ok"
        python notify_email.py --latest --dry-run
@@ -15,7 +15,9 @@ import sys
 import glob
 import argparse
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from collections import Counter
 
 # ─── 설정 ─────────────────────────────────────────────
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
@@ -58,14 +60,28 @@ def classify_interest(article: dict, config: dict) -> str:
     return "⚪ 참고"
 
 
-# ─── 이메일 본문 생성 ──────────────────────────────────
+# ─── 카테고리 분류 ────────────────────────────────────
+def auto_categorize(article: dict, config: dict) -> list[str]:
+    title_lower = article.get("title", "").lower()
+    abstract_lower = article.get("abstract", "").lower()
+    keywords_lower = " ".join(article.get("keywords", [])).lower()
+    all_text = f"{title_lower} {abstract_lower} {keywords_lower}"
+
+    categories = []
+    for cat, keywords in config.get("category_rules", {}).items():
+        if any(kw.lower() in all_text for kw in keywords):
+            categories.append(cat)
+    return categories
+
+
+# ─── HTML 이메일 본문 생성 ─────────────────────────────
 def build_email_body(articles: list[dict], config: dict, status: str = "") -> tuple[str, str]:
-    """이메일 제목과 본문 생성. Returns: (subject, body)"""
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # 관심도별 분류
     groups = {"🔴 필독": [], "🟡 관심": [], "⚪ 참고": []}
     seen_pmids = set()
+    journal_counter = Counter()
+    category_counter = Counter()
 
     for article in articles:
         pmid = article.get("pmid", "")
@@ -76,75 +92,131 @@ def build_email_body(articles: list[dict], config: dict, status: str = "") -> tu
         interest = classify_interest(article, config)
         groups[interest].append(article)
 
+        jkey = article.get("_journal_key", "")
+        jname = config.get("journals", {}).get(jkey, {}).get("name", article.get("journal_abbr", "기타"))
+        journal_counter[jname] += 1
+
+        cats = auto_categorize(article, config)
+        for c in cats:
+            category_counter[c] += 1
+
     total = len(seen_pmids)
     n_must = len(groups["🔴 필독"])
     n_interest = len(groups["🟡 관심"])
     n_ref = len(groups["⚪ 참고"])
 
-    # 저널 목록
-    journals = set()
-    for a in articles:
-        jkey = a.get("_journal_key", "")
-        if jkey and jkey in config.get("journals", {}):
-            journals.add(config["journals"][jkey]["name"])
-        elif a.get("journal_abbr"):
-            journals.add(a["journal_abbr"])
-    journal_str = ", ".join(sorted(journals))
-
-    # Subject
     subject = f"[Journal Alert] {today} 새 논문 {total}편"
     if n_must > 0:
         subject += f" (🔴{n_must})"
 
-    # Body
-    lines = []
-    lines.append(f"📚 Journal Alert — {today}")
-    lines.append(f"저널: {journal_str}")
-    lines.append("")
-    lines.append(f"전체 {total}편 | 🔴 필독 {n_must}편 | 🟡 관심 {n_interest}편 | ⚪ 참고 {n_ref}편")
-    lines.append("")
+    journal_pills = " &nbsp;".join(
+        f'<span style="background:#27272a;padding:2px 8px;border-radius:10px;font-size:12px;color:#a1a1aa;">'
+        f'{name} <b style="color:#e4e4e7;">{cnt}</b></span>'
+        for name, cnt in journal_counter.most_common()
+    )
 
-    # 필독 논문 (전체 나열)
-    if groups["🔴 필독"]:
-        lines.append("━" * 40)
-        lines.append(f"🔴 필독 ({n_must}편)")
-        lines.append("━" * 40)
-        for i, a in enumerate(groups["🔴 필독"], 1):
-            title = a["title"][:80]
-            authors = a.get("authors", "")[:40]
-            doi = a.get("doi_url", "")
-            lines.append(f"  {i}. {title}")
-            lines.append(f"     {authors}")
-            if doi:
-                lines.append(f"     {doi}")
-            lines.append("")
+    cat_pills = " &nbsp;".join(
+        f'<span style="background:#1e1e2e;padding:2px 8px;border-radius:10px;font-size:11px;color:#93c5fd;">'
+        f'{cat} {cnt}</span>'
+        for cat, cnt in category_counter.most_common(8)
+    )
 
-    # 관심 논문 (상위 10편)
-    if groups["🟡 관심"]:
-        lines.append("━" * 40)
-        show = groups["🟡 관심"][:10]
-        lines.append(f"🟡 관심 ({n_interest}편, 상위 {len(show)}편 표시)")
-        lines.append("━" * 40)
-        for i, a in enumerate(show, 1):
-            title = a["title"][:80]
-            authors = a.get("authors", "")[:40]
-            lines.append(f"  {i}. {title}")
-            lines.append(f"     {authors}")
-            lines.append("")
+    def _article_row(a: dict, idx: int, show_summary: bool = False) -> str:
+        title = a["title"]
+        authors = a.get("authors", "")[:50]
+        doi = a.get("doi_url", "")
+        summary = a.get("_summary", "") or a.get("summary", "")
+        jkey = a.get("_journal_key", "")
+        jname = config.get("journals", {}).get(jkey, {}).get("name", "")
 
-    # 참고는 건수만
-    if n_ref > 0:
-        lines.append(f"⚪ 참고: {n_ref}편 (목록 생략)")
-        lines.append("")
+        title_html = f'<a href="{doi}" style="color:#e4e4e7;text-decoration:none;">{title}</a>' if doi else title
+        summary_html = ""
+        if show_summary and summary:
+            summary_html = f'<div style="color:#93c5fd;font-size:12px;margin-top:2px;font-style:italic;">{summary[:120]}</div>'
 
-    # 실행 상태
+        return f"""<tr>
+<td style="padding:8px 12px;border-bottom:1px solid #3f3f46;vertical-align:top;width:24px;color:#71717a;font-size:12px;">{idx}</td>
+<td style="padding:8px 12px;border-bottom:1px solid #3f3f46;">
+  <div style="color:#e4e4e7;font-size:13px;line-height:1.4;">{title_html}</div>
+  {summary_html}
+  <div style="color:#71717a;font-size:11px;margin-top:2px;">{authors} · {jname}</div>
+</td>
+</tr>"""
+
+    must_read_rows = "".join(_article_row(a, i, show_summary=True) for i, a in enumerate(groups["🔴 필독"], 1))
+    interested_rows = "".join(_article_row(a, i) for i, a in enumerate(groups["🟡 관심"][:15], 1))
+    interested_note = f" (상위 15편)" if n_interest > 15 else ""
+
+    status_html = ""
     if status:
-        lines.append("━" * 40)
-        lines.append(f"실행 상태: {status}")
-        lines.append(f"시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        status_html = f"""
+<div style="margin-top:16px;padding:8px 12px;background:#1c1c1c;border-radius:6px;font-size:11px;color:#71717a;">
+  실행 상태: {status} · {datetime.now().strftime('%H:%M:%S')}
+</div>"""
 
-    body = "\n".join(lines)
-    return subject, body
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#09090b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div style="max-width:640px;margin:0 auto;padding:24px 16px;">
+
+<div style="margin-bottom:20px;">
+  <h1 style="color:#fafafa;font-size:20px;margin:0;">📚 Journal Alert</h1>
+  <p style="color:#71717a;font-size:13px;margin:4px 0 0;">{today}</p>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:16px;">
+  <div style="background:#450a0a;border:1px solid #7f1d1d;border-radius:8px;padding:8px 14px;text-align:center;">
+    <div style="color:#fca5a5;font-size:18px;font-weight:700;">{n_must}</div>
+    <div style="color:#fca5a5;font-size:10px;">필독</div>
+  </div>
+  <div style="background:#422006;border:1px solid #78350f;border-radius:8px;padding:8px 14px;text-align:center;">
+    <div style="color:#fcd34d;font-size:18px;font-weight:700;">{n_interest}</div>
+    <div style="color:#fcd34d;font-size:10px;">관심</div>
+  </div>
+  <div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:8px 14px;text-align:center;">
+    <div style="color:#a1a1aa;font-size:18px;font-weight:700;">{n_ref}</div>
+    <div style="color:#a1a1aa;font-size:10px;">참고</div>
+  </div>
+  <div style="background:#18181b;border:1px solid #3f3f46;border-radius:8px;padding:8px 14px;text-align:center;margin-left:auto;">
+    <div style="color:#fafafa;font-size:18px;font-weight:700;">{total}</div>
+    <div style="color:#a1a1aa;font-size:10px;">전체</div>
+  </div>
+</div>
+
+<div style="margin-bottom:12px;">{journal_pills}</div>
+<div style="margin-bottom:20px;">{cat_pills}</div>
+
+{"" if not groups["🔴 필독"] else f'''
+<div style="margin-bottom:20px;">
+  <h2 style="color:#fca5a5;font-size:14px;margin:0 0 8px;border-bottom:1px solid #7f1d1d;padding-bottom:6px;">
+    🔴 필독 ({n_must}편)
+  </h2>
+  <table style="width:100%;border-collapse:collapse;">{must_read_rows}</table>
+</div>
+'''}
+
+{"" if not groups["🟡 관심"] else f'''
+<div style="margin-bottom:20px;">
+  <h2 style="color:#fcd34d;font-size:14px;margin:0 0 8px;border-bottom:1px solid #78350f;padding-bottom:6px;">
+    🟡 관심 ({n_interest}편{interested_note})
+  </h2>
+  <table style="width:100%;border-collapse:collapse;">{interested_rows}</table>
+</div>
+'''}
+
+{"" if n_ref == 0 else f'''
+<div style="color:#71717a;font-size:12px;margin-bottom:16px;">⚪ 참고: {n_ref}편 (목록 생략)</div>
+'''}
+
+{status_html}
+
+<div style="margin-top:24px;padding-top:12px;border-top:1px solid #27272a;color:#52525b;font-size:10px;text-align:center;">
+  Spinoscopy AI · Journal Alert System
+</div>
+
+</div></body></html>"""
+
+    return subject, html
 
 
 # ─── 이메일 발송 ──────────────────────────────────────
@@ -167,10 +239,11 @@ def send_email(subject: str, body: str, config: dict) -> bool:
         print("❌ config.json에 email.sender_email 설정 필요")
         return False
 
-    msg = MIMEText(body, "plain", "utf-8")
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
+    msg.attach(MIMEText(body, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(host, port, timeout=30) as server:
