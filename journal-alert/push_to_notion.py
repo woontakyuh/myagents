@@ -37,7 +37,7 @@ def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict | N
     })
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode()
@@ -308,11 +308,18 @@ def create_notion_page(article: dict, database_id: str, token: str,
             date_str = f"{date_str}-01"
         properties["Publication Date"] = {"date": {"start": date_str}}
 
-    # Keywords
+    # Keywords (Notion multi_select doesn't allow commas)
     if article.get("keywords"):
-        properties["Keywords"] = {
-            "multi_select": [{"name": kw[:100]} for kw in article["keywords"][:5]]
-        }
+        clean_kws = []
+        for kw in article["keywords"][:5]:
+            for part in kw.split(","):
+                part = part.strip()[:100]
+                if part:
+                    clean_kws.append(part)
+        if clean_kws:
+            properties["Keywords"] = {
+                "multi_select": [{"name": k} for k in clean_kws[:10]]
+            }
 
     # Category
     if categories:
