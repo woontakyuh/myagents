@@ -278,12 +278,8 @@ def main():
         if new_files:
             input_files = [max(new_files, key=os.path.getmtime)]
         else:
-            files = glob.glob(os.path.join(DATA_DIR, "*.json"))
-            if not files:
-                print("❌ data/ 에 JSON 파일 없음")
-                sys.exit(1)
-            input_files = [max(files, key=os.path.getmtime)]
-            print("⚠️  new_*.json 없음 — 전체 파일 사용 (신규 필터링 안 됨)")
+            print("ℹ️  new_*.json 없음 — 신규 논문 없으므로 이메일 생략")
+            return
     elif args.data:
         input_files = args.data
     else:

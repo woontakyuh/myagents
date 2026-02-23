@@ -337,7 +337,7 @@ def main():
             
             pmids = search_pubmed(
                 jinfo["pubmed_query"],
-                year=args.year or datetime.now().year,
+                year=args.year if args.year else (None if args.days else datetime.now().year),
                 days=args.days
             )
             if pmids:
@@ -345,14 +345,16 @@ def main():
                 # 저널 키 추가
                 for a in articles:
                     a["_journal_key"] = jkey
-                save_results(articles, jkey, str(args.year or datetime.now().year))
+                label = str(args.year) if args.year else (f'days{args.days}' if args.days else str(datetime.now().year))
+                save_results(articles, jkey, label)
                 print_summary(articles)
                 all_articles.extend(articles)
             time.sleep(1)
         
         # 통합 파일도 저장
         if all_articles:
-            save_results(all_articles, "all_journals", str(args.year or datetime.now().year))
+            label = str(args.year) if args.year else (f'days{args.days}' if args.days else str(datetime.now().year))
+            save_results(all_articles, "all_journals", label)
         
         print(f"\n✅ 전체 {len(all_articles)}편 수집 완료")
         return all_articles

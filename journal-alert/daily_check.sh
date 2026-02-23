@@ -22,7 +22,7 @@ log() {
 }
 
 log "=== Step 1: 논문 수집 ==="
-if python3 "${SCRIPT_DIR}/fetch_papers.py" --all --year "$YEAR" >> "$LOG_FILE" 2>&1; then
+if python3 "${SCRIPT_DIR}/fetch_papers.py" --all --days 7 >> "$LOG_FILE" 2>&1; then
     log "✅ 수집 완료"
     STATUS="${STATUS}fetch:ok "
 else
