@@ -25,6 +25,13 @@ def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
 
+
+def is_source_data_file(path: str) -> bool:
+    name = os.path.basename(path)
+    if not name.endswith(".json"):
+        return False
+    return not name.startswith("new_")
+
 def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict | None:
     """Notion API 호출"""
     url = f"https://api.notion.com/v1/{endpoint}"
@@ -367,19 +374,31 @@ def main():
     data_dir = os.path.join(os.path.dirname(__file__), "data")
 
     if len(sys.argv) > 1 and sys.argv[1] == "--latest":
-        files = glob.glob(os.path.join(data_dir, "*.json"))
+        files = [
+            p
+            for p in glob.glob(os.path.join(data_dir, "*.json"))
+            if is_source_data_file(p)
+        ]
         if not files:
-            print("❌ data/ 에 JSON 파일 없음. fetch_papers.py 먼저 실행하세요.")
+            print("❌ data/ 에 수집 원본 JSON 파일 없음. fetch_papers.py 먼저 실행하세요.")
             sys.exit(1)
         input_files = [max(files, key=os.path.getmtime)]
     elif len(sys.argv) > 1 and sys.argv[1] == "--all":
-        input_files = sorted(glob.glob(os.path.join(data_dir, "*.json")))
+        input_files = sorted(
+            p
+            for p in glob.glob(os.path.join(data_dir, "*.json"))
+            if is_source_data_file(p)
+        )
     elif len(sys.argv) > 1:
         input_files = sys.argv[1:]
     else:
-        files = sorted(glob.glob(os.path.join(data_dir, "*.json")))
+        files = sorted(
+            p
+            for p in glob.glob(os.path.join(data_dir, "*.json"))
+            if is_source_data_file(p)
+        )
         if not files:
-            print("❌ data/ 에 JSON 파일 없음")
+            print("❌ data/ 에 수집 원본 JSON 파일 없음")
             sys.exit(1)
         input_files = [files[-1]]
 

@@ -14,6 +14,7 @@ import os
 import sys
 import glob
 import argparse
+import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -26,6 +27,37 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 def load_config():
     with open(CONFIG_PATH, "r") as f:
         return json.load(f)
+
+
+def marker_path_for(data_file: str) -> str:
+    return f"{data_file}.sent"
+
+
+def compute_batch_key(data_file: str) -> str:
+    hasher = hashlib.sha256()
+    with open(data_file, "rb") as f:
+        while True:
+            chunk = f.read(65536)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def is_already_sent(data_file: str) -> bool:
+    return os.path.exists(marker_path_for(data_file))
+
+
+def write_sent_marker(data_file: str, subject: str) -> None:
+    marker_path = marker_path_for(data_file)
+    payload = {
+        "sent_at": datetime.now().isoformat(timespec="seconds"),
+        "data_file": os.path.basename(data_file),
+        "batch_key": compute_batch_key(data_file),
+        "subject": subject,
+    }
+    with open(marker_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 # ─── 관심도 분류 (push_to_notion.py와 동일) ─────────────
@@ -268,6 +300,7 @@ def main():
     parser.add_argument("--latest", action="store_true", help="최신 데이터 파일 사용")
     parser.add_argument("--status", default="", help="실행 상태 (daily_check.sh에서 전달)")
     parser.add_argument("--dry-run", action="store_true", help="이메일 발송 없이 내용만 출력")
+    parser.add_argument("--force", action="store_true", help="이미 발송된 배치도 강제 재발송")
     args = parser.parse_args()
 
     config = load_config()
@@ -286,9 +319,23 @@ def main():
         print("❌ --latest 또는 --data 옵션 필요")
         sys.exit(1)
 
+    existing_files = [p for p in input_files if os.path.exists(p)]
+    if not existing_files:
+        print("ℹ️  입력 파일이 없어서 이메일 생략")
+        return
+
+    if not args.force:
+        unsent_files = [p for p in existing_files if not is_already_sent(p)]
+    else:
+        unsent_files = existing_files
+
+    if not unsent_files:
+        print("ℹ️  이미 발송된 배치만 있어 이메일 생략")
+        return
+
     # 논문 로드
     articles = []
-    for filepath in input_files:
+    for filepath in unsent_files:
         print(f"📂 {os.path.basename(filepath)}")
         with open(filepath, "r", encoding="utf-8") as f:
             articles.extend(json.load(f))
@@ -310,7 +357,12 @@ def main():
         return
 
     # 발송
-    send_email(subject, body, config)
+    sent_ok = send_email(subject, body, config)
+    if not sent_ok:
+        return
+
+    for filepath in unsent_files:
+        write_sent_marker(filepath, subject)
 
 
 if __name__ == "__main__":
