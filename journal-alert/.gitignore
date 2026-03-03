@@ -1,0 +1,9 @@
+# Runtime state (contains last_fetch date and known PMIDs)
+state.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Data files are tracked (needed for --init-state)
+# data/

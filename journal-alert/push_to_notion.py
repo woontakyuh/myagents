@@ -52,20 +52,21 @@ def notion_api(endpoint: str, data: dict, token: str, method="POST") -> dict | N
         return None
 
 def query_existing(database_id: str, token: str) -> set:
-    """이미 등록된 논문 PMID 목록 조회"""
+    """이미 등록된 논문 DOI/Title 목록 조회. API 실패 시 raise."""
     existing = set()
     has_more = True
     start_cursor = None
-
+    page_count = 0
     while has_more:
         payload = {"page_size": 100}
         if start_cursor:
             payload["start_cursor"] = start_cursor
-
-        result = notion_api(f"databases/{database_id}/query", payload, token)
         if not result:
-            break
-
+            raise RuntimeError(
+                f"Notion DB 조회 실패 (page {page_count + 1}). "
+                f"지금까지 {len(existing)}건 로드됨. "
+                f"dedup 불가 → 중단합니다."
+            )
         for page in result.get("results", []):
             props = page.get("properties", {})
             # DOI로 중복 체크
@@ -77,11 +78,9 @@ def query_existing(database_id: str, token: str) -> set:
             titles = title_prop.get("title", [])
             if titles:
                 existing.add(titles[0].get("plain_text", "").strip()[:50])
-
+        page_count += 1
         has_more = result.get("has_more", False)
         start_cursor = result.get("next_cursor")
-
-    return existing
 
 
 

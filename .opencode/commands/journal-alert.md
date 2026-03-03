@@ -6,28 +6,43 @@ description: 저널 논문 수집 및 Notion DB 업데이트
 
 저널 논문 수집 및 Notion DB 업데이트.
 
-## 워크플로우
+## 권장 워크플로우 (Incremental)
 
-### 1단계: 논문 수집
 ```bash
 cd journal-alert
-python fetch_papers.py                    # 기본: The Spine Journal, 올해
-python fetch_papers.py --year 2026        # 특정 연도
+
+# 1. 최초 1회: 기존 data/에서 state.json 초기화
+python fetch_papers.py --init-state
+
+# 2. 신규 논문 수집 (마지막 실행 이후 PubMed 인덱싱 기준)
+python fetch_papers.py --incremental
+
+# 3. Notion에 Push
+python push_to_notion.py --latest
+
+# 4. 이메일 알림
+python notify_email.py --latest
+```
+
+### 원커맨드 (수집 + Push + 이메일)
+```bash
+cd journal-alert && python fetch_papers.py --incremental && python push_to_notion.py --latest && python notify_email.py --latest
+```
+
+## Incremental 모드 설명
+
+- `state.json`에 마지막 실행 날짜 + 처리된 PMID 목록 저장
+- PubMed `edat` (Entrez date = 인덱싱일) 기준으로 새 논문만 조회
+- 1일 overlap으로 누락 방지 + PMID 기반 dedup으로 중복 제거
+- state.json 없으면 자동으로 최근 14일 조회
+
+## 기존 모드 (전체 연도 수집 — 초기 세팅용)
+
+```bash
+cd journal-alert
+python fetch_papers.py --all --year 2026  # 모든 저널, 2026년 전체
 python fetch_papers.py --days 30          # 최근 30일
-python fetch_papers.py --all --year 2026  # 모든 저널, 2026년
 python fetch_papers.py --journal "Eur Spine J" --year 2026  # 특정 저널
-```
-
-### 2단계: Notion에 Push
-```bash
-export NOTION_TOKEN='ntn_...'  # 또는 config.json에 설정
-python push_to_notion.py --latest    # 가장 최근 수집 파일
-python push_to_notion.py --all       # data/ 전체 파일
-```
-
-### 원커맨드 (수집 + Push)
-```bash
-cd journal-alert && python fetch_papers.py --all --year 2026 && python push_to_notion.py --latest
 ```
 
 ## 자동 분류 규칙
@@ -50,5 +65,6 @@ config.json의 `category_rules`에 따라 자동 분류:
 ## 주의사항
 - PubMed API rate limit: 초당 3회 (자동 처리됨)
 - Notion API rate limit: 초당 3회 (자동 처리됨)
-- 중복 논문은 DOI/Title로 자동 스킵
+- 중복 논문은 PMID + DOI/Title로 자동 스킵
 - NOTION_TOKEN은 환경변수 또는 config.json에 설정
+- Notion DB 조회 실패 시 push가 중단됨 (대량 중복 삽입 방지)
