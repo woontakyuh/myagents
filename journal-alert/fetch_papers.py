@@ -50,16 +50,17 @@ def save_state(state: dict) -> None:
 
 
 def fetch_abstract_from_doi(doi: str) -> str:
-    if not doi:
+    """DOI 페이지에서 abstract 추출 (PubMed에 없을 때 fallback)."""
+    if not doi or not doi.strip():
         return ""
-
     doi = doi.strip()
-    if not doi:
-        return ""
-
     doi_url = f"https://doi.org/{doi}"
-    headers = {"User-Agent": "JournalAlert/1.0"}
-
+    # Springer 등 일부 퍼블리셔가 커스텀 UA를 차단하므로 브라우저 UA 사용
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     final_url = ""
     try:
         req = urllib.request.Request(doi_url, headers=headers)
@@ -70,15 +71,25 @@ def fetch_abstract_from_doi(doi: str) -> str:
         return ""
     finally:
         time.sleep(0.5)
-
     if not final_url:
         return ""
-
     domain = urllib.parse.urlparse(final_url).netloc.lower()
     if domain.startswith("www."):
         domain = domain[4:]
+    # 퍼블리셔별 abstract CSS/ID 패턴
+    ABSTRACT_PATTERNS = {
+        "link.springer.com": r'id="Abs1-content"[^>]*>(.*?)</div>',
+        "journals.sagepub.com": r'class="abstractSection[^"]*"[^>]*>(.*?)</div>',
+        "journals.lww.com": r'id="article-abstract"[^>]*>(.*?)</div>',
+    }
 
-    if domain != "link.springer.com":
+    pattern = None
+    for dom, pat in ABSTRACT_PATTERNS.items():
+        if dom in domain:
+            pattern = pat
+            break
+
+    if not pattern:
         return ""
 
     try:
@@ -91,7 +102,7 @@ def fetch_abstract_from_doi(doi: str) -> str:
     finally:
         time.sleep(0.5)
 
-    m = re.search(r'id="Abs1-content"[^>]*>(.*?)</div>', page_html, re.DOTALL)
+    m = re.search(pattern, page_html, re.DOTALL)
     if not m:
         return ""
 
@@ -526,16 +537,16 @@ def main():
 
 
 def _init_state_from_data(config: dict):
-    """기존 data/ JSON에서 PMID를 추출하여 state.json 초기화."""
+    """기존 data/ JSON에서 PMID를 추출하여 state.json 초기화.
+    last_fetch는 가장 최근 데이터 파일의 수정 시간 기준 (오늘이 아님)."""
     import glob as glob_mod
-
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     files = glob_mod.glob(os.path.join(data_dir, "*.json"))
     if not files:
         print("❌ data/ 에 JSON 파일 없음")
         return
-
     all_pmids = set()
+    latest_mtime = 0
     for filepath in files:
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -544,16 +555,23 @@ def _init_state_from_data(config: dict):
                 pmid = a.get("pmid", "")
                 if pmid:
                     all_pmids.add(pmid)
+            mtime = os.path.getmtime(filepath)
+            if mtime > latest_mtime:
+                latest_mtime = mtime
         except Exception as e:
             print(f"  ⚠ {os.path.basename(filepath)} 로드 실패: {e}")
-
+    # (오늘로 설정하면 data 시점~오늘 사이 논문이 누락됨)
+    if latest_mtime > 0:
+        last_dt = datetime.fromtimestamp(latest_mtime)
+    else:
+        last_dt = datetime.now()
     state = {
-        "last_fetch": datetime.now().strftime("%Y/%m/%d"),
-        "last_fetch_iso": datetime.now().isoformat(timespec="seconds"),
+        "last_fetch": last_dt.strftime("%Y/%m/%d"),
+        "last_fetch_iso": last_dt.isoformat(timespec="seconds"),
         "known_pmids": sorted(all_pmids),
     }
     save_state(state)
-    print(f"✅ state.json 초기화 완료: {len(all_pmids)}개 PMID 등록")
+    print(f"✅ state.json 초기화 완료: {len(all_pmids)}개 PMID, last_fetch={state['last_fetch']}")
 
 
 if __name__ == "__main__":
